@@ -1,0 +1,16 @@
+.DS_Store
+*.log
+snowflake.log
+local/
+__pycache__/
+*.pyc
+.env
+.env.*
+
+# Working notes from the build session. The plan file records customer context,
+# account identifiers, and local paths that must not ship with the repository.
+.snowflake/
+
+# Build-session scaffolding: checkpoint state, reuse lineage, and scope notes.
+# Superseded by docs/TEST_EVIDENCE.md, which is the published record.
+.builddemo-state.json
