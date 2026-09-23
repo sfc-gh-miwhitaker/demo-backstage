@@ -6,13 +6,63 @@ projection, a benchmark, or an ROI claim.
 
 ## Deployment
 
+The rows below were measured against the original `!source` deployment mechanism,
+which chained the modules client-side. Deployment has since moved to a Git
+repository integration with a commit-pinned `EXECUTE IMMEDIATE FROM` handoff.
+**These figures have not been re-measured on the Git path**, and the timing in
+particular will change, because deployment now includes a GitHub fetch.
+
+| Check | Result | Still current |
+|---|---|---|
+| Full teardown, then clean deploy from scratch | Pass, 46 seconds, exit 0 | Timing stale; re-measure on the Git path |
+| Deploy re-run over an existing deployment | Pass, idempotent | Needs re-confirmation |
+| Row count manifest, 8 objects | 8 of 8 `OK` | Yes — re-verified, see below |
+| Determinism: identical counts after full rebuild | Pass | Yes — `DEMO_AS_OF` and the seed are untouched |
+| Teardown leaves shared objects intact | Pass — `SNOWFLAKE_EXAMPLE`, its `SEMANTIC_MODELS` schema, and every unrelated sibling schema in the database all present after teardown | Extended: `GIT_REPOS`, the API integration and the repository clone are also preserved |
+
+### Git deployment framework, verified components
+
+Measured 2026-09-23. These are the parts that could be verified without a push;
+the full end-to-end deployment is pending, because the handoff target
+(`sql/deploy.sql`) must exist on the remote `main` branch before it can run.
+
 | Check | Result |
 |---|---|
-| Full teardown, then clean deploy from scratch | Pass, 46 seconds, exit 0 |
-| Deploy re-run over an existing deployment | Pass, idempotent |
-| Row count manifest, 8 objects | 8 of 8 `OK` |
-| Determinism: identical counts after full rebuild | Pass |
-| Teardown leaves shared objects intact | Pass — `SNOWFLAKE_EXAMPLE`, its `SEMANTIC_MODELS` schema, and every unrelated sibling schema in the database all present after teardown |
+| `CREATE API INTEGRATION` statement compiles | Pass |
+| `CREATE GIT REPOSITORY` statement compiles | Pass |
+| Target repository is public and reachable | Pass, HTTP 200 |
+| Manifest block: passes on correct data | Pass — `8 of 8 OK` against the deployed dataset |
+| Manifest block: carries failing counts into the error text | Pass — dynamic detail surfaces, since a Scripting exception message is otherwise fixed at declaration |
+| Teardown gate blocks when unconfirmed | Pass — raises `-20005` with the exact `SET` statement to run |
+| Teardown gate passes when confirmed | Pass |
+| Role switching survives `EXECUTE IMMEDIATE FROM` | Pass — established by `demo-restaurant-recovery-explorer`, whose `03_reader.sql` switches to `SECURITYADMIN` through the same mechanism |
+
+Not yet verified: the commit-hash resolution against a live clone, the nested
+relative-path module chain, the full deploy timing, and idempotency of the second
+run. All four require the orchestrator to be pushed to `main`.
+
+Two defects were found and fixed during this work.
+
+The teardown gate was first written against `SYSTEM$GET_SESSION_VARIABLE`, which
+does not exist. The correct function is `GETVARIABLE`, which returns NULL for an
+unset variable rather than raising — so a single `IS DISTINCT FROM` comparison
+covers both "unset" and "set to the wrong word". A plain `<>` would have yielded
+NULL against an unset variable, which is not TRUE, and the gate would have fallen
+open.
+
+A `00_guard.sql` pre-deployment collision check was built, tested, and then
+removed. It worked — it passed against the live deployment and its negative
+control correctly detected a non-matching object — but it hardcoded
+`"owner" = 'SYSADMIN'` and duplicated comment-prefix literals from `01_setup.sql`
+and `03_governance.sql`. Either would make a legitimate redeploy fail `-20004`:
+deploying under a custom admin role, or editing a `COMMENT` string in a module.
+It traded a low-probability object collision for a moderate-probability
+self-inflicted failure, in a public repo where the resulting error gives a
+stranger nothing to debug. Deleted rather than hardened, because the collision it
+defended against needs distinctively-named objects to already exist under another
+owner.
+
+
 
 ## Correctness suite
 

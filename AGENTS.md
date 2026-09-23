@@ -40,9 +40,15 @@ snow sql -c <connection> -f deploy_all.sql
 # Tests
 bash tools/run_tests.sh --connection <connection>
 
-# Teardown
-snow sql -c <connection> -f teardown_all.sql
+# Teardown (requires the confirmation variable)
+snow sql -c <connection> -q "SET BACKSTAGE_CONFIRM = 'TEARDOWN';" -f teardown_all.sql
 ```
+
+Deployment runs from Git, not from disk. `deploy_all.sql` creates the API
+integration and repository clone, resolves `main` to a commit hash, and executes
+`sql/deploy.sql` from `@...BACKSTAGE_ANALYTICS_REPO/commits/<hash>/sql/`. **Local
+edits do not deploy until they are pushed.** When iterating on a module, push
+first or run that module directly with `snow sql -f sql/0N_....sql`.
 
 ## Snowflake Objects
 
@@ -54,13 +60,34 @@ snow sql -c <connection> -f teardown_all.sql
 | Warehouse | `SFE_BACKSTAGE_ANALYTICS_WH` |
 | Agent | `SNOWFLAKE_EXAMPLE.BACKSTAGE_ANALYTICS.BACKSTAGE_ANALYTICS_AGENT` |
 | Persona roles | `BACKSTAGE_LABEL_BROAD`, `BACKSTAGE_LABEL_LIMITED`, `BACKSTAGE_LABEL_NONE` |
+| API integration | `SFE_BACKSTAGE_ANALYTICS_GIT_API` (preserved on teardown) |
+| Git repository | `SNOWFLAKE_EXAMPLE.GIT_REPOS.BACKSTAGE_ANALYTICS_REPO` (preserved on teardown) |
 
-`SNOWFLAKE_EXAMPLE` and `SNOWFLAKE_EXAMPLE.SEMANTIC_MODELS` are shared across SE
-projects. Teardown drops the project schema with `RESTRICT`, the two
-`SV_BACKSTAGE_*` views, the warehouse, and the three persona roles — nothing else.
+`SNOWFLAKE_EXAMPLE`, `SNOWFLAKE_EXAMPLE.SEMANTIC_MODELS`, and
+`SNOWFLAKE_EXAMPLE.GIT_REPOS` are shared across SE projects. Teardown drops the
+project schema with `RESTRICT`, the two `SV_BACKSTAGE_*` views, the warehouse, and
+the three persona roles — nothing else. The API integration and the repository
+clone survive on purpose, so redeployment needs neither a re-fetch nor
+ACCOUNTADMIN.
 
 ## Gotchas
 
+- Deployment is **commit-pinned from the pushed remote**. A module edited locally
+  and not pushed will not appear in the account, and the deployment will still
+  report success — from the previous commit.
+- `EXECUTE IMMEDIATE FROM` returns only the **last statement's** result, which is
+  why the row count manifest in `sql/deploy.sql` raises on mismatch instead of
+  returning a status column. A status column would be invisible through the Git
+  handoff. Never convert it back to a plain `SELECT`.
+- A relative path in `EXECUTE IMMEDIATE FROM` is legal only **inside** an
+  executing file, and resolves against that file's directory. `sql/deploy.sql`
+  depends on this to keep every module on the pinned commit; the top-level call in
+  `deploy_all.sql` must stay absolute.
+- No module may contain `{{`, `{%`, or `{#`. Nothing is Jinja-rendered today, but
+  adding a `USING` clause to any `EXECUTE IMMEDIATE FROM` would turn that file
+  into a template and those sequences into syntax errors. Files in a Git
+  repository also cannot be loaded from inside a Jinja template, so prefer nested
+  `EXECUTE IMMEDIATE FROM` over Jinja `include`.
 - An agent needs **both** `SELECT` and `REFERENCES` on a semantic view it does
   not own. `SELECT` alone lets you query the view directly but fails through the
   agent, and the error does not point at the missing grant.

@@ -33,7 +33,8 @@ dimensions. One agent exposes both grains as two Cortex Analyst tools plus
 
 | File | Contents |
 |---|---|
-| `deploy_all.sql` | Self-contained deployment; sources every `sql/` module in order |
+| `deploy_all.sql` | The only hand-pasted file. API integration, repo clone, fetch, commit resolution, handoff |
+| `sql/deploy.sql` | In-Snowflake orchestrator; chains modules by relative path, then asserts the manifest |
 | `sql/01_setup.sql` | Infrastructure and `DEMO_CONFIG` (`DEMO_AS_OF`, `RELEASE_ID`) |
 | `sql/02_data.sql` | Deterministic synthetic dimensions and both facts |
 | `sql/03_governance.sql` | `ENTITLEMENT`, row access policy, persona roles, lookup views |
@@ -92,12 +93,38 @@ refusing a question the data can now answer.
 | Agent | `SNOWFLAKE_EXAMPLE.BACKSTAGE_ANALYTICS.BACKSTAGE_ANALYTICS_AGENT` |
 | Roles | `BACKSTAGE_LABEL_BROAD`, `BACKSTAGE_LABEL_LIMITED`, `BACKSTAGE_LABEL_NONE` |
 | Policies | `LABEL_REVENUE_POLICY`, `LABEL_STREAMS_POLICY`, `LABEL_LOOKUP_POLICY` |
+| API integration | `SFE_BACKSTAGE_ANALYTICS_GIT_API` (preserved on teardown) |
+| Git repository | `SNOWFLAKE_EXAMPLE.GIT_REPOS.BACKSTAGE_ANALYTICS_REPO` (preserved on teardown) |
+
+## Deployment Model
+
+`deploy_all.sql` is pasted by hand; it creates the API integration (ACCOUNTADMIN,
+once per account), clones the public repo into `SNOWFLAKE_EXAMPLE.GIT_REPOS`,
+fetches, resolves `main` to a 40-hex commit hash, and executes
+`@...BACKSTAGE_ANALYTICS_REPO/commits/<hash>/sql/deploy.sql`. That file reaches
+its modules by relative path, which resolves against its own directory, so every
+module comes from the same commit with no templating.
+
+Consequence worth stating to anyone iterating: **an unpushed local edit does not
+deploy, and the deployment still reports success from the previous commit.** Push
+first, or run the single module directly with `snow sql -f sql/0N_....sql`.
+
+Teardown requires `SET BACKSTAGE_CONFIRM = 'TEARDOWN';` and preserves the
+integration and the clone, so redeployment needs neither a re-fetch nor
+ACCOUNTADMIN.
 
 ## Gotchas
 
 Each of these was hit during the build. They are recorded because most of them
 produced a plausible wrong answer rather than an error.
 
+- **`EXECUTE IMMEDIATE FROM` returns only the last statement's result.** The row
+  count manifest therefore raises on mismatch rather than returning a status
+  column; a status column would be invisible through the Git handoff, which makes
+  it not a check at all. Do not convert it back to a plain `SELECT`.
+- **A relative `EXECUTE IMMEDIATE FROM` path works only inside an executing file**
+  and resolves against that file's directory. This is what keeps every module on
+  the pinned commit. The top-level call in `deploy_all.sql` must stay absolute.
 - **`FACTS` is not a row-level escape hatch.** Requesting a raw fact alongside
   dimensions returns it at the dimension grain, not per source row. Summing it
   collapses the multiple services inside a DSP family and silently understates

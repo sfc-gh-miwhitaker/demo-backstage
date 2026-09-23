@@ -37,10 +37,35 @@ Expect **9.31%**, with the numerator and denominator shown. Asking by title
 instead (`Neon Orchard`) is also worth trying — three recordings share that title,
 so the agent will ask which one you mean rather than picking one.
 
-`deploy_all.sql` is self-contained. No Git repository, API integration, stage, or
-external file is required.
+Nothing to set first, and no variables to get wrong. The first deployment in a
+fresh account needs **ACCOUNTADMIN** once, to create the API integration; every
+later deployment runs as SYSADMIN.
 
-To remove everything: paste `teardown_all.sql` and Run All.
+### How deployment works
+
+`deploy_all.sql` is the only file you paste by hand. It connects the account to
+this public repository, resolves `main` to a commit hash, and then runs
+`sql/deploy.sql` from that pinned commit — so all six SQL modules come from one
+revision, and the revision is echoed back to you when it finishes.
+
+> **It deploys what is pushed, not what is on your laptop.** Local edits you have
+> not pushed will not appear in the account. Redeploying also replaces the agent,
+> which resets its version history.
+
+Deployment is idempotent: every container is `CREATE … IF NOT EXISTS` and every
+built object is `CREATE OR REPLACE`, so re-running is safe.
+
+To remove everything:
+
+```sql
+SET BACKSTAGE_CONFIRM = 'TEARDOWN';
+```
+
+then paste `teardown_all.sql` and Run All. That word is deliberately not `DEPLOY`:
+teardown drops a schema and three account-level roles, so it asks for one
+deliberate confirmation, while deployment is additive and idempotent and asks for
+nothing. Teardown keeps the API integration and the repository clone, so a
+redeployment needs no ACCOUNTADMIN.
 
 ## The Five Questions
 
@@ -120,17 +145,24 @@ and what production integration still requires.
 
 ## Testing
 
-```sql
--- After deployment, in a worksheet:
-!source tests/01_reference_queries.sql   -- expected values in docs/EXPECTED_RESULTS.md
-!source tests/02_access_tests.sql        -- six access assertions
-```
-
-Or from a terminal:
-
 ```bash
 bash tools/run_tests.sh --connection <your-connection>
 ```
+
+That runs both suites, once per persona, and exits non-zero on failure. The tests
+stay local and are **not** deployed from Git: they are the independent ground
+truth, so coupling them to the thing they check would defeat the point.
+
+To run one suite by hand, paste its contents into a worksheet, or:
+
+```bash
+snow sql -c <your-connection> -f tests/01_reference_queries.sql   # expected values in docs/EXPECTED_RESULTS.md
+snow sql -c <your-connection> -f tests/02_access_tests.sql        # eight access assertions
+```
+
+Run the access suite under a persona role with `--role BACKSTAGE_LABEL_LIMITED
+--secondary-roles NONE`. Running it as `SYSADMIN` passes trivially, because
+`SYSADMIN` holds entitlements on every label.
 
 Reference queries are hand-written against the base tables and were authored
 before the semantic views existed, so they cannot inherit the semantic layer's
@@ -166,6 +198,15 @@ why the grains must never be joined.
 | `docs/BOUNDARIES.md` | Demo-only versus production integration boundaries |
 | `ELI5.md` | Plain-language explanation |
 | `AGENTS.md` | Project conventions for AI tooling |
+
+## Deployment Files
+
+| File | Role |
+|---|---|
+| `deploy_all.sql` | The only file pasted by hand. Creates the API integration and repository clone, then hands off to a pinned commit. |
+| `sql/deploy.sql` | Runs inside Snowflake. Chains the modules in dependency order, then asserts the row count manifest. |
+| `sql/01_setup.sql` … `sql/06_grants.sql` | The deployment modules, unchanged by the Git framework. |
+| `teardown_all.sql` | Removes the demo; keeps the shared and source objects. |
 
 ## Out of Scope
 

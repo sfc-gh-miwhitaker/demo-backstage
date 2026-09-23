@@ -17,7 +17,9 @@ All data is synthetic. Every label, artist, and recording is fictional.
 
    Expect **93,403**. If it is 0, your role holds no entitlements — check you are
    on `SYSADMIN` and not `SECURITYADMIN`. If the object does not exist, redeploy:
-   paste `deploy_all.sql` and Run All, about 45 seconds.
+   paste `deploy_all.sql` and Run All, about a minute. It fetches from GitHub, so
+   it deploys **what is pushed to `main`** — and the first deployment in a fresh
+   account needs ACCOUNTADMIN once, to create the API integration.
 
 2. **Confirm the agent is in CoWork.** AI & ML, then Agents, then
    `BACKSTAGE_ANALYTICS_AGENT`, then Add to CoWork. Ask the first question once to
@@ -214,13 +216,18 @@ than a substituted answer that someone later discovers was not live.
 The demo is stateless; nothing is consumed by presenting it.
 
 ```bash
-# Full rebuild, about 45 seconds. Deterministic: identical data every time.
-snow sql -c <connection> -f teardown_all.sql
+# Full rebuild. Deterministic: identical data every time.
+# Deployment fetches from GitHub, so it rebuilds from main, not from this checkout.
+snow sql -c <connection> -q "SET BACKSTAGE_CONFIRM = 'TEARDOWN';" -f teardown_all.sql
 snow sql -c <connection> -f deploy_all.sql
 
 # Verify
 bash tools/run_tests.sh --connection <connection>
 ```
+
+A successful deployment ends by naming the commit it deployed. If that hash is not
+the one you expect, you are looking at an older revision of the source — push and
+re-run.
 
 If you switched roles in Snowsight, switch back to `SYSADMIN`.
 
@@ -234,8 +241,10 @@ If you switched roles in Snowsight, switch back to `SYSADMIN`.
 | First question is slow | Cold XSMALL warehouse | Ask one throwaway question during pre-flight |
 | Limited persona still sees everything | CoWork is not honoring the role switch | Use the worksheet fallback in the Governance segment and say it is a worksheet |
 | Numbers differ from this runbook | Data was rebuilt with a changed `DEMO_AS_OF` or seed | Re-run `tools/run_tests.sh`; if it fails, redeploy from a clean teardown |
-| Row count manifest shows `MISMATCH` | Data did not build as expected | Treat every expected value as invalid, teardown and redeploy, and re-run the tests before presenting |
-
+| Deployment fails with `Row count manifest mismatch` | Data did not build as expected; the error names the tables and counts | Treat every expected value as invalid, teardown and redeploy, and re-run the tests before presenting |
+| Deployment fails with `-20002` | `main` has no commit hash, or the repository is not reachable | Confirm the repo is public and `main` has been pushed |
+| Deployed code is not what you edited | Deployment is commit-pinned from the pushed remote | Push, then redeploy; the final message names the deployed commit |
+| Teardown fails with `-20005` | The confirmation variable is unset or wrong | `SET BACKSTAGE_CONFIRM = 'TEARDOWN';` |
 ## Known presenter risks
 
 - **CoWork role switching is the single dependency worth checking first.** It was
